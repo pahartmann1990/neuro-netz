@@ -1,41 +1,48 @@
+
 export enum Neurotransmitter {
-  Dopamine = 'DOPAMINE',   // Learning/Reward (Plasticity)
-  Serotonin = 'SEROTONIN', // Mood/Stability (Inhibition/Threshold)
-  Adrenaline = 'ADRENALINE' // Energy/Speed (Excitation)
+  Dopamine = 'DOPAMINE',
+  Serotonin = 'SEROTONIN',
+  Adrenaline = 'ADRENALINE'
 }
 
-export enum RegionType {
-  SensoryInput = 'SENSORY', // Text/Audio Language Input
-  VisualInput = 'VISUAL',   // Image Input
-  Association = 'ASSOCIATION', // Processing
-  MotorOutput = 'MOTOR' // Result/Action
+export type RegionId = string; // e.g., "INPUT", "SCIENCE", "BIOLOGY"
+
+export interface Cluster {
+  id: RegionId;
+  label: string;
+  x: number;
+  y: number;
+  radius: number;
+  color: string;
+  targetCount: number; // Target number of neurons in this cluster
 }
 
 export interface Synapse {
   targetId: string;
-  weight: number; // Strength (0.0 - 10.0)
+  weight: number; 
   plasticity: number;
   lastActive: number;
+  isShortcut?: boolean;
 }
 
 export interface Neuron {
   id: string;
-  region: RegionType;
+  regionId: RegionId; // Belongs to which cluster?
   x: number;
   y: number;
+  label?: string; // Concept label (e.g. "Hello")
+  character?: string; // For Input Grid (e.g. "A")
+  isCompressed?: boolean; // If true, this represents a compressed symbol (binary/hex optimization)
   
-  // Electrical State
   potential: number; 
   threshold: number; 
   refractoryPeriod: number; 
   lastFired: number;
   
-  // Biological Metadata
   age: number; 
   stress: number; 
   energy: number; 
 
-  // Internal Chemical Balance
   neurotransmitters: {
     [Neurotransmitter.Dopamine]: number;
     [Neurotransmitter.Serotonin]: number;
@@ -45,10 +52,30 @@ export interface Neuron {
   connections: Synapse[];
 }
 
+export interface ChatMessage {
+  sender: 'USER' | 'SYSTEM' | 'SELF';
+  text: string;
+  timestamp: number;
+}
+
 export interface BrainStats {
   neuronCount: number;
   synapseCount: number;
-  inputActivity: number; // Visualizes input strength
-  outputActivity: number; // Visualizes output strength
+  clusterCount: number;
   fps: number;
+  latestMessage?: ChatMessage;
+  mode: 'IDLE' | 'THINKING' | 'FROZEN';
+  zoomLevel: number;
+}
+
+export interface ViewportTransform {
+  x: number;
+  y: number;
+  scale: number;
+}
+
+export interface SerializedBrain {
+  timestamp: number;
+  neurons: Neuron[];
+  clusters: Cluster[];
 }

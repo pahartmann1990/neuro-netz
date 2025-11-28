@@ -1,16 +1,32 @@
-import { Neuron, Neurotransmitter, RegionType, Synapse, BrainStats } from "../types";
-import { PHYSICS, REGION_LAYOUT } from "../constants";
+
+import { Neuron, Neurotransmitter, Synapse, BrainStats, ChatMessage, Cluster, SerializedBrain } from "../types";
+import { PHYSICS, COLORS, ALPHABET_GRID } from "../constants";
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 export class BioEngine {
   neurons: Neuron[] = [];
+  clusters: Cluster[] = [];
   width: number;
   height: number;
+  
+  // State Flags
+  isThinking: boolean = false;
+  isFrozen: boolean = false;
+  
   lastTick: number = 0;
   frameCount: number = 0;
-  fps: number = 60;
   
+  // For Zoom/Pan reference in stats only
+  currentZoom: number = 1;
+
+  // Output Buffering for Sentence Generation
+  outputBuffer: string[] = [];
+  lastFiredTime: number = 0;
+  
+  // System Message Buffer
+  pendingSystemMessages: ChatMessage[] = [];
+
   constructor(width: number, height: number) {
     this.width = width;
     this.height = height;
@@ -19,46 +35,69 @@ export class BioEngine {
 
   initializeNetwork() {
     this.neurons = [];
-    Object.keys(REGION_LAYOUT).forEach(rType => {
-      // Initialize sparse clusters
-      for (let i = 0; i < 15; i++) {
-        this.addNeuron(rType as RegionType);
-      }
+    this.clusters = [];
+
+    // 1. Create Input Cluster (The Keyboard)
+    const inputCluster: Cluster = {
+      id: 'INPUT',
+      label: 'SENSORY (KEYBOARD)',
+      x: 0, // Centered relative to view
+      y: 0,
+      radius: 200,
+      color: COLORS.CLUSTER_INPUT,
+      targetCount: 40
+    };
+    this.clusters.push(inputCluster);
+
+    // 2. Create Initial Association Cluster
+    const assocCluster: Cluster = {
+      id: 'CORE',
+      label: 'ASSOCIATION',
+      x: 400,
+      y: 0,
+      radius: 250,
+      color: COLORS.CLUSTER_DEFAULT,
+      targetCount: 50
+    };
+    this.clusters.push(assocCluster);
+
+    // 3. Build the Alphabet Grid
+    const startX = inputCluster.x - 100;
+    const startY = inputCluster.y - 80;
+    const gap = 25;
+
+    ALPHABET_GRID.forEach((row, rIdx) => {
+      row.forEach((char, cIdx) => {
+        this.createNeuron({
+          id: `KEY_${char}`,
+          regionId: 'INPUT',
+          x: startX + cIdx * gap + (rIdx * 10),
+          y: startY + rIdx * gap,
+          character: char,
+          threshold: 10,
+        });
+      });
     });
+
+    // 4. Fill Core
+    for(let i=0; i<20; i++) {
+      this.addNeuronToCluster('CORE');
+    }
+
     this.initialWiring();
   }
 
-  addNeuron(region: RegionType, parent?: Neuron) {
-    if (this.neurons.length >= PHYSICS.MAX_NEURONS) return;
-
-    const layout = REGION_LAYOUT[region];
-    const centerX = layout.x * this.width;
-    const centerY = layout.y * this.height;
-
-    // Organic spread
-    let x, y;
-    if (parent) {
-        // Grow outward from parent
-        const angle = Math.random() * Math.PI * 2;
-        const dist = 20 + Math.random() * 40;
-        x = parent.x + Math.cos(angle) * dist;
-        y = parent.y + Math.sin(angle) * dist;
-    } else {
-        // Initial cluster
-        x = centerX + (Math.random() - 0.5) * 150;
-        y = centerY + (Math.random() - 0.5) * 150;
-    }
-
-    // Boundary check
-    x = Math.max(10, Math.min(this.width - 10, x));
-    y = Math.max(10, Math.min(this.height - 10, y));
-
-    const newNeuron: Neuron = {
-      id: generateId(),
-      region,
-      x, y,
+  createNeuron(partial: Partial<Neuron>): Neuron {
+    const n: Neuron = {
+      id: partial.id || generateId(),
+      regionId: partial.regionId || 'CORE',
+      x: partial.x || 0,
+      y: partial.y || 0,
+      character: partial.character,
+      label: partial.label,
+      isCompressed: partial.isCompressed || false,
       potential: 0,
-      threshold: PHYSICS.FIRE_THRESHOLD_BASE,
+      threshold: partial.threshold || PHYSICS.FIRE_THRESHOLD_BASE,
       refractoryPeriod: 0,
       lastFired: 0,
       age: 0,
@@ -71,201 +110,330 @@ export class BioEngine {
       },
       connections: []
     };
+    this.neurons.push(n);
+    return n;
+  }
 
-    this.neurons.push(newNeuron);
+  addNeuronToCluster(clusterId: string, parent?: Neuron) {
+    const cluster = this.clusters.find(c => c.id === clusterId);
+    if (!cluster) return;
+
+    // Random pos within cluster
+    const angle = Math.random() * Math.PI * 2;
+    const dist = Math.random() * (cluster.radius * 0.9);
     
-    // Connect to nearby neurons immediately
-    this.connectNeuron(newNeuron);
+    let x, y;
+    if (parent) {
+      x = parent.x + (Math.random()-0.5)*60;
+      y = parent.y + (Math.random()-0.5)*60;
+    } else {
+      x = cluster.x + Math.cos(angle) * dist;
+      y = cluster.y + Math.sin(angle) * dist;
+    }
+
+    const n = this.createNeuron({ regionId: clusterId, x, y });
+    this.connectNeuron(n);
+    
+    if (parent) {
+      // Bi-directional strong link for context
+      parent.connections.push({ targetId: n.id, weight: 3.0, plasticity: 1.0, lastActive: 0 });
+      n.connections.push({ targetId: parent.id, weight: 1.0, plasticity: 0.5, lastActive: 0 });
+    }
   }
 
   connectNeuron(source: Neuron) {
-    // Find neighbors
     const neighbors = this.neurons.filter(n => {
-        if (n.id === source.id) return false;
-        const dx = n.x - source.x;
-        const dy = n.y - source.y;
-        return (dx*dx + dy*dy) < (PHYSICS.CONNECTION_RADIUS * PHYSICS.CONNECTION_RADIUS);
+      if (n.id === source.id) return false;
+      const dx = n.x - source.x;
+      const dy = n.y - source.y;
+      return (dx*dx + dy*dy) < (PHYSICS.CONNECTION_RADIUS ** 2);
     });
 
     neighbors.forEach(target => {
-        // Logic: Inputs -> Association -> Output
-        // Rarely connect backwards (feedback loops)
-        let canConnect = false;
+      if (source.regionId === 'INPUT' && target.regionId === 'INPUT') return; 
 
-        if (source.region === target.region) canConnect = true;
-        
-        if ((source.region === RegionType.SensoryInput || source.region === RegionType.VisualInput) 
-             && target.region === RegionType.Association) canConnect = true;
-
-        if (source.region === RegionType.Association && target.region === RegionType.MotorOutput) canConnect = true;
-
-        if (canConnect && Math.random() > 0.3) {
-             source.connections.push({
-                 targetId: target.id,
-                 weight: 0.5 + Math.random(), // Random initial weight
-                 plasticity: 0.8,
-                 lastActive: 0
-             });
-        }
+      if (Math.random() > 0.7) {
+        source.connections.push({
+          targetId: target.id,
+          weight: Math.random(),
+          plasticity: 0.5,
+          lastActive: 0
+        });
+      }
     });
   }
 
   initialWiring() {
-      this.neurons.forEach(n => this.connectNeuron(n));
+    this.neurons.forEach(n => this.connectNeuron(n));
   }
 
-  /**
-   * Process raw text/audio input
-   */
-  processTextInput(text: string) {
-    const inputNeurons = this.neurons.filter(n => n.region === RegionType.SensoryInput);
-    if (inputNeurons.length === 0) return;
+  // --- SAVE / LOAD SYSTEM ---
+  
+  exportState(): string {
+    const state: SerializedBrain = {
+      timestamp: Date.now(),
+      clusters: this.clusters,
+      neurons: this.neurons
+    };
+    return JSON.stringify(state);
+  }
 
-    // Deterministic hashing of input to specific neurons
-    // This ensures "Apple" always stimulates the same initial neurons
-    let hash = 0;
-    for (let i = 0; i < text.length; i++) {
-        hash = text.charCodeAt(i) + ((hash << 5) - hash);
+  importState(json: string) {
+    try {
+      const state: SerializedBrain = JSON.parse(json);
+      if (state.neurons && state.clusters) {
+        this.neurons = state.neurons;
+        this.clusters = state.clusters;
+        console.log("Brain state restored.");
+      }
+    } catch (e) {
+      console.error("Failed to load brain state", e);
+    }
+  }
+
+  // --- INTERACTION ---
+
+  processInput(text: string) {
+    if (this.isFrozen) return;
+
+    // 1. Flash Input Grid (Sensory)
+    const upper = text.toUpperCase();
+    for (let i = 0; i < upper.length; i++) {
+      const char = upper[i];
+      const neuron = this.neurons.find(n => n.character === char);
+      if (neuron) {
+        neuron.potential += 80; 
+        neuron.stress += 5; // Reduced stress from simple keystrokes
+      }
     }
 
-    // Select neurons based on hash
-    const targetIndex = Math.abs(hash) % inputNeurons.length;
-    const targetNeuron = inputNeurons[targetIndex];
-
-    // Stimulate
-    targetNeuron.potential += 80;
-    targetNeuron.neurotransmitters[Neurotransmitter.Adrenaline] += 0.5;
+    // 2. Advanced Tokenization (German support, Punctuation)
+    // Matches words (including umlauts) OR punctuation marks as separate tokens
+    const tokens = text.match(/[\p{L}\p{N}_]+|[.,!?;:]/gu);
     
-    // Stimulate neighbors slightly (associative area)
-    this.stimulateRadius(targetNeuron.x, targetNeuron.y, 30, 20);
+    if (!tokens) return;
+
+    let prevConcept: Neuron | undefined;
+
+    tokens.forEach(token => {
+        // Find existing concept or create new one
+        let concept = this.neurons.find(n => n.label === token);
+        
+        if (concept) {
+            concept.potential += 60; // Higher stimulation
+            concept.stress += 15; // Faster growth
+            
+            // Expansion Logic (More strict now)
+            // 1. Threshold increased to 500 (was 100) to prevent explosion
+            // 2. Token must be longer than 2 chars (no single letters like 'S', 'T')
+            if (concept.stress > 500 && token.length > 2) {
+                this.expandRegion(concept);
+            }
+        } else {
+            // New concept learned!
+            const core = this.clusters.find(c => c.id === 'CORE');
+            if (core) {
+                concept = this.createNeuron({
+                    regionId: 'CORE',
+                    label: token,
+                    x: core.x + (Math.random()-0.5)*100,
+                    y: core.y + (Math.random()-0.5)*100,
+                    threshold: 20
+                });
+            }
+        }
+
+        // 3. Context Wiring (Word -> Word)
+        if (prevConcept && concept && prevConcept.id !== concept.id) {
+            // Check if connection exists
+            const existing = prevConcept.connections.find(c => c.targetId === concept!.id);
+            if (!existing) {
+                prevConcept.connections.push({
+                    targetId: concept.id,
+                    weight: 2.5, // Stronger initial connection
+                    plasticity: 0.9,
+                    lastActive: 0
+                });
+            } else {
+                existing.weight += 1.5; // Reinforce sequence heavily
+                existing.plasticity = Math.min(1.0, existing.plasticity + 0.1);
+            }
+        }
+        prevConcept = concept;
+    });
+
+    // 4. Run Compression Check
+    this.compressPathways();
   }
 
-  /**
-   * Process Image Data (Pixel array)
-   * This is a simplified "Visual Cortex" simulation
-   */
-  processVisualInput(pixelData: Uint8ClampedArray, width: number, height: number) {
-      const visualNeurons = this.neurons.filter(n => n.region === RegionType.VisualInput);
-      if (visualNeurons.length === 0) return;
-
-      // Map pixel brightness to neuron potential
-      // We sample the image grid loosely
-      visualNeurons.forEach(n => {
-          // Determine where this neuron sits relative to region bounds
-          // This is a rough mapping of "retina" to "visual cortex"
-          // In a real app we'd need normalized coordinates
-          
-          // Randomly exciting for now based on total brightness to simulate 'seeing' something
-          // Real mapping would require normalized neuron coordinates 0..1
-          if (Math.random() > 0.5) {
-              n.potential += 50;
-              n.stress += 5;
-          }
-      });
+  // The "Binary" Optimization
+  compressPathways() {
+     // Find neurons with too many connections and simplify them
+     this.neurons.forEach(n => {
+         const strongLinks = n.connections.filter(c => c.weight > 5).length;
+         if (strongLinks > 8 && !n.isCompressed && n.label && n.label.length > 3) {
+             n.isCompressed = true; // Visual change to "Symbol"
+             n.energy = 2.0; // High efficiency
+             n.threshold = 5; // Low threshold (easy to access)
+         }
+     });
   }
 
-  stimulateRadius(x: number, y: number, r: number, amount: number) {
-      this.neurons.forEach(n => {
-          const dx = n.x - x;
-          const dy = n.y - y;
-          if ((dx*dx + dy*dy) < r*r) {
-              n.potential += amount;
-          }
-      });
+  expandRegion(seedNeuron: Neuron) {
+    if (!seedNeuron.label) return;
+    const newClusterId = seedNeuron.label.toUpperCase();
+    
+    // Don't duplicate
+    if (this.clusters.find(c => c.id === newClusterId)) return;
+
+    // Notify User
+    this.pendingSystemMessages.push({
+        sender: 'SYSTEM',
+        text: `NEUES AREAL GEBILDET: ${newClusterId}`,
+        timestamp: Date.now()
+    });
+
+    // Expand OUTWARDS based on current map size
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 350 + (this.clusters.length * 80); 
+    
+    const newCluster: Cluster = {
+      id: newClusterId,
+      label: newClusterId, 
+      x: seedNeuron.x + Math.cos(angle) * dist, // Relative expansion
+      y: seedNeuron.y + Math.sin(angle) * dist,
+      radius: 120,
+      color: COLORS.DYNAMIC_REGIONS[this.clusters.length % COLORS.DYNAMIC_REGIONS.length],
+      targetCount: 15
+    };
+
+    this.clusters.push(newCluster);
+
+    // Migrate concept neuron physically
+    seedNeuron.regionId = newClusterId;
+    seedNeuron.x = newCluster.x;
+    seedNeuron.y = newCluster.y;
+    seedNeuron.stress = 0; // Reset stress
+
+    // Fill with sub-neurons (Deepening knowledge)
+    for(let i=0; i<6; i++) {
+      this.addNeuronToCluster(newClusterId, seedNeuron);
+    }
   }
+
+  startThinking() { this.isThinking = true; this.isFrozen = false; }
+  stopThinking() { this.isThinking = false; }
+  toggleFreeze() { this.isFrozen = !this.isFrozen; }
 
   tick(): BrainStats {
-    const now = Date.now();
-    let totalInputActivity = 0;
-    let totalOutputActivity = 0;
-    
-    // FPS Calc
-    if (now - this.lastTick > 1000) {
-        this.lastTick = now;
-        this.frameCount = 0;
+    if (this.isFrozen) {
+      return {
+        neuronCount: this.neurons.length,
+        synapseCount: 0,
+        clusterCount: this.clusters.length,
+        fps: 0,
+        mode: 'FROZEN',
+        zoomLevel: this.currentZoom
+      };
     }
+
+    const now = Date.now();
     this.frameCount++;
+    if (now - this.lastTick > 1000) {
+      this.lastTick = now;
+      this.frameCount = 0;
+    }
 
-    // --- Main Neuron Loop ---
-    // Using a for-loop is faster than forEach for thousands of items
+    let newMessage: ChatMessage | undefined;
+
+    // 0. Flush Pending System Messages (e.g. Region Created)
+    if (this.pendingSystemMessages.length > 0) {
+        newMessage = this.pendingSystemMessages.shift();
+    }
+
+    // THINKING MODE: Random associations
+    if (this.isThinking) {
+      const concepts = this.neurons.filter(n => n.label);
+      if (concepts.length > 0) {
+        const rnd = concepts[Math.floor(Math.random() * concepts.length)];
+        rnd.potential += 40;
+      }
+    }
+
+    // Physics Loop
     for (let i = 0; i < this.neurons.length; i++) {
-        const neuron = this.neurons[i];
+      const n = this.neurons[i];
+      n.potential *= 0.92; // Decay
+      if (n.refractoryPeriod > 0) n.refractoryPeriod--;
+
+      if (n.potential > n.threshold && n.refractoryPeriod <= 0) {
+        n.lastFired = now;
+        n.potential = -10;
+        n.refractoryPeriod = n.isCompressed ? 2 : 8; // Compressed nodes recover faster
         
-        // 1. Biological Housekeeping
-        neuron.age++;
-        neuron.potential *= 0.92; // Electrical decay
+        for (const syn of n.connections) {
+          const target = this.neurons.find(t => t.id === syn.targetId);
+          if (target) {
+            target.potential += syn.weight;
+            syn.lastActive = now;
+            // Strengthen used paths
+            if (target.potential > target.threshold) {
+              syn.weight = Math.min(10, syn.weight + 0.1); 
+            }
+          }
+        }
+
+        // --- SENTENCE BUFFERING LOGIC ---
+        // Only buffer meaningful labels, not raw input characters unless explicitly labelled
+        if (n.label && n.regionId !== 'INPUT' && !this.isThinking) {
+           this.outputBuffer.push(n.label);
+           this.lastFiredTime = now;
+        }
+      }
+    }
+
+    // Check Output Buffer for Silence (End of Thought)
+    // Wait 600ms of silence before constructing the sentence
+    if (this.outputBuffer.length > 0 && (now - this.lastFiredTime > 600)) {
         
-        // Recover energy
-        if (neuron.energy < 1.0) neuron.energy += 0.002;
+        // 1. Deduplicate consecutive identical words (Stutter removal)
+        // e.g. "Hallo Hallo Welt" -> "Hallo Welt"
+        const uniqueWords = this.outputBuffer.filter((word, index, arr) => {
+            return index === 0 || word !== arr[index - 1];
+        });
 
-        // 2. Refractory Period
-        if (neuron.refractoryPeriod > 0) {
-            neuron.refractoryPeriod--;
-            continue;
+        // 2. Join words
+        let sentence = uniqueWords.join(' ');
+
+        // 3. Fix Punctuation Spacing
+        // "Hallo , wie geht es dir ?" -> "Hallo, wie geht es dir?"
+        sentence = sentence
+            .replace(/\s+([.,!?:;])/g, '$1')  // Remove space before punctuation
+            .replace(/([.,!?:;])([a-zA-Z])/g, '$1 $2'); // Ensure space after punctuation
+
+        // Only speak if it's new information and has substance
+        // Prevent empty or single-character spam
+        if (sentence.length > 1 && !newMessage) {
+             // Only output if different from very last output (prevent loops)
+             // Simple check, can be expanded
+             newMessage = {
+                sender: 'SYSTEM',
+                text: sentence,
+                timestamp: now
+            };
         }
-
-        // 3. Fire Logic
-        if (neuron.potential > neuron.threshold) {
-            // FIRE!
-            neuron.lastFired = now;
-            neuron.potential = -20; // Hyperpolarization
-            neuron.refractoryPeriod = 4;
-            neuron.energy -= 0.05;
-            neuron.stress += 1; // Activity causes structural stress
-
-            // Activity Stats
-            if (neuron.region === RegionType.MotorOutput) totalOutputActivity++;
-            if (neuron.region === RegionType.SensoryInput) totalInputActivity++;
-
-            // Propagate
-            for (let j = 0; j < neuron.connections.length; j++) {
-                const syn = neuron.connections[j];
-                const target = this.neurons.find(n => n.id === syn.targetId);
-                if (target) {
-                    target.potential += syn.weight;
-                    syn.lastActive = now;
-                    
-                    // Hebbian Learning:
-                    // If target is already excited (potential high), strengthen connection
-                    if (target.potential > 10) {
-                        syn.weight = Math.min(10, syn.weight + (0.1 * syn.plasticity));
-                    }
-                }
-            }
-
-            // Neurogenesis (Expansion)
-            // If stress is high, the brain region expands physically
-            if (neuron.stress > 100) {
-                this.addNeuron(neuron.region, neuron); // Budding
-                neuron.stress = 0;
-                // Cost of growth
-                neuron.neurotransmitters[Neurotransmitter.Dopamine] += 1;
-            }
-        }
-
-        // 4. Structural Plasticity (Decay/Pruning)
-        // Only prune connections that are extremely weak and old
-        // We do NOT decommission based on simple time anymore
-        for (let j = neuron.connections.length - 1; j >= 0; j--) {
-            const syn = neuron.connections[j];
-            
-            // Very slow decay of unused paths
-            if (now - syn.lastActive > 2000) {
-                syn.weight *= 0.999; 
-            }
-
-            if (syn.weight < 0.05) {
-                neuron.connections.splice(j, 1); // Prune
-            }
-        }
+        
+        this.outputBuffer = []; // Clear buffer
     }
 
     return {
-        neuronCount: this.neurons.length,
-        synapseCount: this.neurons.reduce((a, b) => a + b.connections.length, 0),
-        inputActivity: totalInputActivity,
-        outputActivity: totalOutputActivity,
-        fps: this.frameCount
+      neuronCount: this.neurons.length,
+      synapseCount: this.neurons.reduce((acc, n) => acc + n.connections.length, 0),
+      clusterCount: this.clusters.length,
+      fps: this.frameCount,
+      latestMessage: newMessage,
+      mode: this.isThinking ? 'THINKING' : 'IDLE',
+      zoomLevel: this.currentZoom
     };
   }
 }

@@ -1,127 +1,165 @@
-import React, { useRef, useState } from 'react';
-import { BrainStats } from '../types';
+
+import React, { useState, useEffect, useRef } from 'react';
+import { BrainStats, ChatMessage } from '../types';
 
 interface ControlPanelProps {
   stats: BrainStats;
+  chatHistory: ChatMessage[];
   onTextInput: (text: string) => void;
-  onImageInput: (file: File) => void;
+  onStartThinking: () => void;
+  onStopThinking: () => void;
+  onToggleFreeze: () => void;
+  onSave: () => void;
+  onLoad: (file: File) => void;
   renderEnabled: boolean;
   setRenderEnabled: (val: boolean) => void;
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({ 
-    stats, onTextInput, onImageInput, renderEnabled, setRenderEnabled 
+    stats, chatHistory, onTextInput, 
+    onStartThinking, onStopThinking, onToggleFreeze,
+    onSave, onLoad,
+    renderEnabled, setRenderEnabled 
 }) => {
-  const [isListening, setIsListening] = useState(false);
+  const [inputText, setInputText] = useState('');
+  const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Web Speech API
-  const toggleMic = () => {
-    if (!('webkitSpeechRecognition' in window)) {
-        alert("Browser unterstützt keine Spracherkennung.");
-        return;
-    }
-    
-    if (isListening) {
-        setIsListening(false);
-        return;
-    }
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory]);
 
-    const recognition = new (window as any).webkitSpeechRecognition();
-    recognition.continuous = false;
-    recognition.lang = 'de-DE';
-    recognition.interimResults = false;
-
-    recognition.onstart = () => setIsListening(true);
-    recognition.onend = () => setIsListening(false);
-    
-    recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        console.log("Gehört:", transcript);
-        onTextInput(transcript);
-    };
-
-    recognition.start();
+  const handleSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!inputText.trim()) return;
+      onTextInput(inputText);
+      setInputText('');
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files && e.target.files[0]) {
-          const file = e.target.files[0];
-          // Determine type
-          if (file.type.startsWith('image/')) {
-              onImageInput(file);
-          } else if (file.type === 'text/plain') {
-              const reader = new FileReader();
-              reader.onload = (ev) => {
-                  if (ev.target?.result) onTextInput(ev.target.result as string);
-              };
-              reader.readAsText(file);
-          }
-      }
+    if (e.target.files && e.target.files[0]) {
+      onLoad(e.target.files[0]);
+    }
   };
 
   return (
-    <div className="absolute bottom-4 left-4 right-4 bg-slate-900/90 backdrop-blur border border-slate-700 p-4 rounded-xl shadow-2xl flex flex-wrap items-center gap-4 text-white">
+    <div className="h-full w-96 bg-slate-900 border-l border-slate-700 flex flex-col shadow-2xl z-20">
       
-      {/* Inputs */}
-      <div className="flex items-center gap-2 border-r border-slate-700 pr-4">
-        <button 
-            onClick={toggleMic}
-            className={`p-3 rounded-full border transition-all ${isListening ? 'bg-red-500/20 border-red-500 text-red-500 animate-pulse' : 'bg-slate-800 border-slate-600 hover:bg-slate-700'}`}
-            title="Mikrofon aktivieren"
-        >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-        </button>
+      {/* Header */}
+      <div className="p-4 border-b border-slate-700 bg-slate-900">
+        <h2 className="text-white font-black text-xl flex items-center justify-between">
+            <span>BIO-NET V5</span>
+            <span className={`text-xs px-2 py-1 rounded ${
+                stats.mode === 'THINKING' ? 'bg-purple-500 text-white animate-pulse' :
+                stats.mode === 'FROZEN' ? 'bg-red-500 text-white' : 
+                'bg-green-500/20 text-green-400'
+            }`}>
+                {stats.mode}
+            </span>
+        </h2>
+        <div className="grid grid-cols-2 gap-2 mt-3 text-xs font-mono text-slate-400">
+            <div className="bg-slate-800 p-2 rounded">
+                <span className="block text-slate-500">CLUSTERS</span>
+                <span className="text-white font-bold">{stats.clusterCount}</span>
+            </div>
+            <div className="bg-slate-800 p-2 rounded">
+                <span className="block text-slate-500">ZOOM</span>
+                <span className="text-blue-400 font-bold">{(stats.zoomLevel * 100).toFixed(0)}%</span>
+            </div>
+        </div>
+      </div>
 
-        <button 
+      {/* Control Actions */}
+      <div className="p-3 grid grid-cols-2 gap-2 border-b border-slate-800">
+          <button 
+            onMouseDown={onStartThinking}
+            onMouseUp={onStopThinking}
+            className="bg-purple-700 hover:bg-purple-600 active:scale-95 text-white py-3 rounded font-bold text-sm shadow-lg shadow-purple-900/20"
+          >
+            NACHDENKEN
+          </button>
+          <button 
+            onClick={onToggleFreeze}
+            className={`${stats.mode === 'FROZEN' ? 'bg-red-600 animate-pulse' : 'bg-red-900 hover:bg-red-800'} text-white py-3 rounded font-bold text-sm shadow-lg`}
+          >
+            {stats.mode === 'FROZEN' ? 'FORTSETZEN' : 'NOT-AUS'}
+          </button>
+      </div>
+
+      {/* Persistence Controls */}
+      <div className="p-3 grid grid-cols-2 gap-2 border-b border-slate-800 bg-slate-800/50">
+          <button 
+            onClick={onSave}
+            className="bg-emerald-700 hover:bg-emerald-600 text-white py-2 rounded text-xs font-bold"
+          >
+            💾 SPEICHERN (.JSON)
+          </button>
+          <button 
             onClick={() => fileInputRef.current?.click()}
-            className="p-3 rounded-full bg-slate-800 border border-slate-600 hover:bg-slate-700"
-            title="Datei hochladen (Bild/Text)"
-        >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        </button>
-        <input 
+            className="bg-sky-700 hover:bg-sky-600 text-white py-2 rounded text-xs font-bold"
+          >
+            📂 LADEN
+          </button>
+          <input 
             type="file" 
             ref={fileInputRef} 
+            onChange={handleFileChange} 
             className="hidden" 
-            accept="image/*,text/plain" 
-        />
+            accept=".json"
+          />
       </div>
 
-      {/* Stats */}
-      <div className="flex-1 flex gap-6 text-xs font-mono">
-        <div>
-            <div className="text-slate-500">NEURONEN</div>
-            <div className="text-xl font-bold">{stats.neuronCount}</div>
-        </div>
-        <div>
-            <div className="text-slate-500">SYNAPSEN</div>
-            <div className="text-xl font-bold text-blue-400">{stats.synapseCount}</div>
-        </div>
-        <div>
-            <div className="text-slate-500">INPUT AKTIVITÄT</div>
-            <div className="w-24 h-4 bg-slate-800 rounded overflow-hidden">
-                <div className="h-full bg-pink-500 transition-all duration-75" style={{ width: `${Math.min(100, stats.inputActivity * 10)}%` }}></div>
+      {/* Chat Log */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 font-mono text-sm bg-slate-950">
+        {chatHistory.length === 0 && (
+            <div className="text-slate-700 text-center mt-10 italic text-xs">
+                -- BEREIT FÜR INPUT --<br/>
+                Tippe Wörter. Das System lernt Zusammenhänge.<br/>
+                Mausrad zum Zoomen.<br/>
+                Drag zum Bewegen.
             </div>
-        </div>
-        <div>
-            <div className="text-slate-500">OUTPUT AKTIVITÄT</div>
-            <div className="w-24 h-4 bg-slate-800 rounded overflow-hidden">
-                <div className="h-full bg-green-500 transition-all duration-75" style={{ width: `${Math.min(100, stats.outputActivity * 10)}%` }}></div>
+        )}
+        {chatHistory.map((msg, i) => (
+            <div key={i} className={`flex ${msg.sender === 'USER' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] p-2 rounded-lg ${
+                    msg.sender === 'USER' 
+                    ? 'bg-blue-600 text-white rounded-br-none' 
+                    : 'bg-slate-800 text-green-400 rounded-bl-none border border-green-900'
+                }`}>
+                    <div className="text-[9px] uppercase tracking-wider opacity-50 mb-1">{msg.sender}</div>
+                    {msg.text}
+                </div>
             </div>
-        </div>
+        ))}
+        <div ref={chatEndRef} />
       </div>
 
-      {/* Settings */}
-      <div className="flex items-center gap-2 border-l border-slate-700 pl-4">
-        <label className="flex items-center gap-2 cursor-pointer">
+      {/* Input Area */}
+      <div className="p-4 border-t border-slate-700 bg-slate-900">
+        <form onSubmit={handleSubmit} className="flex gap-2">
+            <input 
+                type="text" 
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder="Eingabe..."
+                className="flex-1 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:outline-none focus:border-blue-500 font-mono"
+            />
+            <button 
+                type="submit"
+                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded font-bold transition-colors"
+            >
+                ➜
+            </button>
+        </form>
+        
+        <label className="mt-3 flex items-center gap-2 cursor-pointer text-xs text-slate-500 hover:text-white">
             <input 
                 type="checkbox" 
                 checked={renderEnabled} 
                 onChange={(e) => setRenderEnabled(e.target.checked)} 
-                className="rounded bg-slate-800 border-slate-600"
+                className="rounded bg-slate-700 border-slate-600"
             />
-            <span className="text-xs text-slate-400">VISUALISIERUNG</span>
+            VISUALISIERUNG
         </label>
       </div>
 
