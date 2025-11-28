@@ -1,11 +1,12 @@
 
 export enum Neurotransmitter {
-  Dopamine = 'DOPAMINE',
-  Serotonin = 'SEROTONIN',
-  Adrenaline = 'ADRENALINE'
+  Dopamine = 'DOPAMINE', // Reward
+  Serotonin = 'SEROTONIN', // Mood/Stability
+  Adrenaline = 'ADRENALINE', // Energy
+  Cortisol = 'CORTISOL' // Punishment/Pruning
 }
 
-export type RegionId = string; // e.g., "INPUT", "SCIENCE", "BIOLOGY"
+export type RegionId = string;
 
 export interface Cluster {
   id: RegionId;
@@ -14,7 +15,7 @@ export interface Cluster {
   y: number;
   radius: number;
   color: string;
-  targetCount: number; // Target number of neurons in this cluster
+  targetCount: number; 
 }
 
 export interface Synapse {
@@ -27,12 +28,13 @@ export interface Synapse {
 
 export interface Neuron {
   id: string;
-  regionId: RegionId; // Belongs to which cluster?
+  regionId: RegionId; 
   x: number;
   y: number;
-  label?: string; // Concept label (e.g. "Hello")
-  character?: string; // For Input Grid (e.g. "A")
-  isCompressed?: boolean; // If true, this represents a compressed symbol (binary/hex optimization)
+  label?: string; 
+  character?: string; 
+  pixelIndex?: number; // For Visual Input (0-99)
+  isCompressed?: boolean; // Represents a merged concept
   
   potential: number; 
   threshold: number; 
@@ -44,9 +46,7 @@ export interface Neuron {
   energy: number; 
 
   neurotransmitters: {
-    [Neurotransmitter.Dopamine]: number;
-    [Neurotransmitter.Serotonin]: number;
-    [Neurotransmitter.Adrenaline]: number;
+    [key in Neurotransmitter]?: number;
   };
 
   connections: Synapse[];
@@ -56,6 +56,7 @@ export interface ChatMessage {
   sender: 'USER' | 'SYSTEM' | 'SELF';
   text: string;
   timestamp: number;
+  isCorrection?: boolean;
 }
 
 export interface BrainStats {
@@ -64,7 +65,7 @@ export interface BrainStats {
   clusterCount: number;
   fps: number;
   latestMessage?: ChatMessage;
-  mode: 'IDLE' | 'THINKING' | 'FROZEN';
+  mode: 'IDLE' | 'THINKING' | 'SLEEPING' | 'FROZEN';
   zoomLevel: number;
 }
 
