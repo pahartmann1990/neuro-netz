@@ -1,69 +1,71 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import BrainCanvas from './components/BrainCanvas';
 import ControlPanel from './components/ControlPanel';
+import { BioEngine } from './services/BioEngine';
 import { BrainStats } from './types';
 
 const App: React.FC = () => {
-  const [inputSignal, setInputSignal] = useState<string | null>(null);
+  // Engine instance persists across renders
+  const engineRef = useRef<BioEngine>(new BioEngine(window.innerWidth, window.innerHeight));
+  
   const [stats, setStats] = useState<BrainStats>({ 
-      neuronCount: 0, synapseCount: 0, averageStress: 0, averageDopamine: 0, learningCycles: 0 
+      neuronCount: 0, synapseCount: 0, inputActivity: 0, outputActivity: 0, fps: 0 
   });
   
-  // Triggers for Save/Load
-  const [saveTrigger, setSaveTrigger] = useState(0);
-  const [loadTrigger, setLoadTrigger] = useState(0);
-  
-  // Auto-Training State
-  const [isAutoTraining, setIsAutoTraining] = useState(false);
+  const [renderEnabled, setRenderEnabled] = useState(true);
 
-  const handleTeach = (text: string) => {
-      setInputSignal(text);
-      setTimeout(() => setInputSignal(null), 100);
+  const handleTextInput = (text: string) => {
+      console.log("Injecting Text:", text);
+      engineRef.current.processTextInput(text);
   };
 
-  // Auto-Trainer Logic (Simulates Browsing)
-  useEffect(() => {
-      let interval: ReturnType<typeof setInterval>;
-      if (isAutoTraining) {
-          const words = ["Code", "Logic", "Web", "Brain", "Neural", "React", "Data", "Input", "Output", "Learn"];
-          interval = setInterval(() => {
-              const word = words[Math.floor(Math.random() * words.length)];
-              handleTeach(word);
-          }, 800); // Feed a word every 800ms
-      }
-      return () => clearInterval(interval);
-  }, [isAutoTraining]);
+  const handleImageInput = (file: File) => {
+      console.log("Processing Image...");
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+          // Draw to a hidden canvas to extract pixels
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+              // Downscale for neural processing (32x32 is enough for basic patterns)
+              canvas.width = 32;
+              canvas.height = 32;
+              ctx.drawImage(img, 0, 0, 32, 32);
+              const imgData = ctx.getImageData(0, 0, 32, 32);
+              engineRef.current.processVisualInput(imgData.data, 32, 32);
+          }
+          URL.revokeObjectURL(url);
+      };
+      img.src = url;
+  };
 
   return (
-    <div className="w-full h-screen relative bg-black overflow-hidden font-sans">
+    <div className="w-full h-screen relative bg-black overflow-hidden font-sans select-none">
       
       <BrainCanvas 
-        inputSignal={inputSignal} 
+        engine={engineRef.current}
         onStatsUpdate={setStats}
-        saveTrigger={saveTrigger}
-        loadTrigger={loadTrigger}
+        renderEnabled={renderEnabled}
       />
+
+      <div className="absolute top-6 left-6 pointer-events-none">
+         <h1 className="text-4xl font-black text-white tracking-tighter mix-blend-difference">
+           NEURO<span className="text-teal-500">CORE</span> V2
+         </h1>
+         <div className="text-slate-400 font-mono text-xs mt-2">
+            BIOLOGISCHE ARCHITEKTUR <br/>
+            KEINE SIMULATION VON ZEIT-ZERFALL
+         </div>
+      </div>
 
       <ControlPanel 
         stats={stats}
-        onTeach={handleTeach}
-        onSave={() => setSaveTrigger(s => s + 1)}
-        onLoad={() => setLoadTrigger(s => s + 1)}
-        onAutoTrainToggle={setIsAutoTraining}
-        isAutoTraining={isAutoTraining}
+        onTextInput={handleTextInput}
+        onImageInput={handleImageInput}
+        renderEnabled={renderEnabled}
+        setRenderEnabled={setRenderEnabled}
       />
-
-      <div className="absolute top-4 left-4 pointer-events-none">
-        <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-blue-500 opacity-90 tracking-tighter">
-          NEURO-CORE
-        </h1>
-        <p className="text-white/40 text-xs font-mono mt-1 max-w-xs">
-          Autonome Biologische Architektur.
-          <br/>
-          Keine externen Algorithmen. Reine Homöostase.
-        </p>
-      </div>
-
     </div>
   );
 };

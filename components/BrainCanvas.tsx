@@ -1,191 +1,131 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { BioEngine } from '../services/BioEngine';
-import { Neuron, RegionType, BrainStats } from '../types';
-import { COLORS, REGION_LAYOUT, PHYSICS } from '../constants';
+import { RegionType, BrainStats } from '../types';
+import { COLORS, REGION_LAYOUT } from '../constants';
 
 interface BrainCanvasProps {
-  inputSignal: string | null;
+  engine: BioEngine;
   onStatsUpdate: (stats: BrainStats) => void;
-  saveTrigger: number; // Increment to trigger save
-  loadTrigger: number; // Increment to trigger load
+  renderEnabled: boolean;
 }
 
-const BrainCanvas: React.FC<BrainCanvasProps> = ({ inputSignal, onStatsUpdate, saveTrigger, loadTrigger }) => {
+const BrainCanvas: React.FC<BrainCanvasProps> = ({ engine, onStatsUpdate, renderEnabled }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
-  const engineRef = useRef<BioEngine | null>(null);
-  const [neurons, setNeurons] = useState<Neuron[]>([]);
-  const animationRef = useRef<number>(0);
-
-  // Initialize Engine
+  
+  // Handle Resize
   useEffect(() => {
-    if (!containerRef.current) return;
-    const { clientWidth, clientHeight } = containerRef.current;
+    const handleResize = () => {
+        if (containerRef.current && canvasRef.current) {
+            canvasRef.current.width = containerRef.current.clientWidth;
+            canvasRef.current.height = containerRef.current.clientHeight;
+            engine.width = containerRef.current.clientWidth;
+            engine.height = containerRef.current.clientHeight;
+        }
+    };
+    window.addEventListener('resize', handleResize);
+    handleResize(); // Init
+    return () => window.removeEventListener('resize', handleResize);
+  }, [engine]);
+
+  // Main Render Loop
+  useEffect(() => {
+    let animationId: number;
     
-    if (!engineRef.current) {
-        engineRef.current = new BioEngine(clientWidth, clientHeight);
-    }
-  }, []);
+    const render = () => {
+      // 1. Logic Tick (Always runs)
+      const stats = engine.tick();
+      onStatsUpdate(stats);
 
-  // Handle Input
-  useEffect(() => {
-      if (inputSignal && engineRef.current) {
-          engineRef.current.processInput(inputSignal);
-      }
-  }, [inputSignal]);
+      // 2. Draw Tick (Only if enabled)
+      if (renderEnabled && canvasRef.current) {
+          const ctx = canvasRef.current.getContext('2d');
+          if (ctx) {
+              const width = canvasRef.current.width;
+              const height = canvasRef.current.height;
 
-  // Handle Save
-  useEffect(() => {
-      if (saveTrigger > 0 && engineRef.current) {
-          const data = JSON.stringify(engineRef.current.neurons);
-          localStorage.setItem('bio_brain_v1', data);
-          console.log("Brain saved to LocalStorage");
-      }
-  }, [saveTrigger]);
+              // Clear
+              ctx.fillStyle = COLORS.BACKGROUND;
+              ctx.fillRect(0, 0, width, height);
 
-  // Handle Load
-  useEffect(() => {
-      if (loadTrigger > 0 && engineRef.current) {
-          const data = localStorage.getItem('bio_brain_v1');
-          if (data) {
-              const parsed = JSON.parse(data);
-              engineRef.current.loadState(parsed);
-              console.log("Brain loaded from LocalStorage");
+              // Draw Region Zones (Background)
+              Object.values(REGION_LAYOUT).forEach(layout => {
+                  const cx = layout.x * width;
+                  const cy = layout.y * height;
+                  ctx.beginPath();
+                  ctx.arc(cx, cy, 100, 0, Math.PI * 2);
+                  ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+                  ctx.fill();
+                  
+                  ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                  ctx.font = '10px monospace';
+                  ctx.textAlign = 'center';
+                  ctx.fillText(layout.label, cx, cy - 110);
+              });
+
+              const now = Date.now();
+
+              // Draw Synapses
+              // Optimized: batch strokes? Hard with different colors.
+              engine.neurons.forEach(neuron => {
+                  neuron.connections.forEach(syn => {
+                      const target = engine.neurons.find(n => n.id === syn.targetId);
+                      if (!target) return;
+
+                      ctx.beginPath();
+                      ctx.moveTo(neuron.x, neuron.y);
+                      ctx.lineTo(target.x, target.y);
+                      
+                      const isActive = (now - syn.lastActive) < 150;
+                      ctx.lineWidth = Math.min(4, syn.weight * 0.5);
+                      
+                      if (isActive) {
+                          ctx.strokeStyle = '#F59E0B'; // Spark color
+                          ctx.lineWidth = 2;
+                      } else {
+                          ctx.strokeStyle = `rgba(100, 116, 139, ${Math.min(0.3, syn.weight * 0.1)})`;
+                      }
+                      ctx.stroke();
+                  });
+              });
+
+              // Draw Neurons
+              engine.neurons.forEach(neuron => {
+                  const isFiring = neuron.potential > neuron.threshold;
+                  
+                  ctx.beginPath();
+                  // Size depends on energy/potential
+                  const r = 3 + (isFiring ? 2 : 0) + (neuron.stress / 50); 
+                  ctx.arc(neuron.x, neuron.y, r, 0, Math.PI * 2);
+                  
+                  if (isFiring) {
+                      ctx.fillStyle = '#ffffff';
+                      ctx.shadowBlur = 10;
+                      ctx.shadowColor = '#ffffff';
+                  } else {
+                      ctx.shadowBlur = 0;
+                      if (neuron.region === RegionType.SensoryInput) ctx.fillStyle = '#ec4899';
+                      else if (neuron.region === RegionType.VisualInput) ctx.fillStyle = '#eab308';
+                      else if (neuron.region === RegionType.MotorOutput) ctx.fillStyle = '#22c55e';
+                      else ctx.fillStyle = '#6366f1';
+                  }
+                  
+                  ctx.fill();
+              });
+              ctx.shadowBlur = 0; // Reset
           }
       }
-  }, [loadTrigger]);
 
-  // Main Loop
-  useEffect(() => {
-    const loop = () => {
-      if (engineRef.current) {
-        const stats = engineRef.current.tick();
-        setNeurons([...engineRef.current.neurons]); 
-        onStatsUpdate(stats);
-      }
-      animationRef.current = requestAnimationFrame(loop);
+      animationId = requestAnimationFrame(render);
     };
-    loop();
-    return () => cancelAnimationFrame(animationRef.current);
-  }, [onStatsUpdate]);
 
-  const handleCanvasClick = (e: React.MouseEvent) => {
-    if (!engineRef.current || !svgRef.current) return;
-    const rect = svgRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    engineRef.current.stimulateArea(x, y);
-  };
+    render();
+    return () => cancelAnimationFrame(animationId);
+  }, [engine, renderEnabled, onStatsUpdate]);
 
   return (
-    <div ref={containerRef} className="w-full h-full bg-slate-950 overflow-hidden relative select-none">
-      <svg 
-        ref={svgRef} 
-        width="100%" 
-        height="100%" 
-        onClick={handleCanvasClick}
-        className="cursor-crosshair"
-      >
-        <defs>
-          <filter id="glow-intense">
-            <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
-            <feMerge>
-              <feMergeNode in="coloredBlur"/>
-              <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-          </filter>
-        </defs>
-
-        {/* Region Zones */}
-        {Object.entries(REGION_LAYOUT).map(([key, layout]) => {
-           const cx = layout.x * (containerRef.current?.clientWidth || 1000);
-           const cy = layout.y * (containerRef.current?.clientHeight || 800);
-           let color = COLORS.REGION_ASSOCIATION;
-           if (key === RegionType.SensoryInput) color = COLORS.REGION_SENSORY;
-           if (key === RegionType.MotorOutput) color = COLORS.REGION_MOTOR;
-
-           return (
-             <g key={key}>
-               <circle cx={cx} cy={cy} r="150" fill={color} filter="blur(60px)" opacity="0.4" />
-               <text x={cx} y={cy - 120} textAnchor="middle" fill={color.replace('0.1', '0.8')} className="text-xs font-bold font-mono tracking-widest pointer-events-none opacity-50">
-                  {layout.label}
-               </text>
-             </g>
-           );
-        })}
-
-        {/* Connections */}
-        {neurons.map((neuron) => (
-          <g key={`synapses-${neuron.id}`}>
-            {neuron.connections.map((synapse) => {
-              const target = neurons.find(n => n.id === synapse.targetId);
-              if (!target) return null;
-              
-              const now = Date.now();
-              const justFired = (now - synapse.lastActive) < 100;
-              
-              // Thickness based on weight
-              const width = Math.max(0.5, synapse.weight * 1.5);
-              
-              // Color based on strength and recent activity
-              let stroke = '#334155'; // Dark slate default
-              if (justFired) stroke = '#fbbf24'; // Gold flash
-              else if (synapse.weight > 2.0) stroke = '#10b981'; // Strong connection (Green)
-
-              return (
-                <line
-                  key={`${neuron.id}-${target.id}`}
-                  x1={neuron.x}
-                  y1={neuron.y}
-                  x2={target.x}
-                  y2={target.y}
-                  stroke={stroke}
-                  strokeWidth={width}
-                  opacity={justFired ? 1 : 0.4}
-                />
-              );
-            })}
-          </g>
-        ))}
-
-        {/* Neurons */}
-        {neurons.map((neuron) => {
-          // Display logic
-          const isFiring = neuron.potential > 20; // Visual threshold
-          const displayRadius = 3 + (neuron.energy * 3) + (neuron.potential / 10);
-          
-          let fill = '#475569';
-          if (neuron.region === RegionType.SensoryInput) fill = '#ec4899';
-          if (neuron.region === RegionType.Association) fill = '#6366f1';
-          if (neuron.region === RegionType.MotorOutput) fill = '#22c55e';
-
-          // Stress indication
-          if (neuron.stress > 20) fill = '#ef4444'; 
-
-          return (
-            <g key={neuron.id} style={{ transition: 'all 0.1s ease' }}>
-                <circle
-                cx={neuron.x}
-                cy={neuron.y}
-                r={displayRadius}
-                fill={isFiring ? '#ffffff' : fill}
-                filter={isFiring ? "url(#glow-intense)" : ""}
-                opacity={isFiring ? 1 : 0.8}
-                />
-                {/* Age Ring */}
-                <circle
-                    cx={neuron.x}
-                    cy={neuron.y}
-                    r={displayRadius + 2}
-                    fill="none"
-                    stroke={fill}
-                    strokeWidth="1"
-                    opacity="0.3"
-                />
-            </g>
-          );
-        })}
-      </svg>
+    <div ref={containerRef} className="w-full h-full bg-black">
+      <canvas ref={canvasRef} className="block" />
     </div>
   );
 };

@@ -1,5 +1,7 @@
 {
-  "name": "BioNeuro Sim",
-  "description": "A biological neural network simulator where logic is driven by neurotransmitters (Dopamine, Serotonin, Adrenaline) rather than pure mathematics.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "name": "",
+  "description": ""
 }
