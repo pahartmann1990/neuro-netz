@@ -16,6 +16,8 @@ export interface Cluster {
   radius: number;
   color: string;
   targetCount: number; 
+  isDynamic?: boolean;
+  layerIndex?: number; // For Deep Learning Architecture (0-4)
 }
 
 export interface Synapse {
@@ -53,10 +55,28 @@ export interface Neuron {
 }
 
 export interface ChatMessage {
-  sender: 'USER' | 'SYSTEM' | 'SELF';
+  id: string;
+  sessionId: number; // Multi-Chat Support
+  sender: 'USER' | 'SYSTEM' | 'SELF' | 'TEACHER';
   text: string;
   timestamp: number;
   isCorrection?: boolean;
+}
+
+export interface TeacherState {
+    status: 'IDLE' | 'ANALYZING' | 'TEACHING' | 'WAITING' | 'CORRECTING' | 'PRAISING';
+    currentFocus: string;
+    patience: number;
+    lastAction: string;
+    thoughtProcess: string; // What the Teacher AI is thinking internally
+}
+
+export interface DiagnosticReport {
+    networkHealth: number; // 0-100
+    deadNeurons: number;
+    weakConnections: number;
+    dominantTopic: string;
+    errorCode?: string; // e.g., "NO_OUTPUT_SIGNAL"
 }
 
 export interface BrainStats {
@@ -65,8 +85,17 @@ export interface BrainStats {
   clusterCount: number;
   fps: number;
   latestMessage?: ChatMessage;
-  mode: 'IDLE' | 'THINKING' | 'SLEEPING' | 'FROZEN';
+  mode: 'IDLE' | 'THINKING' | 'SLEEPING' | 'FROZEN' | 'READING' | 'TRAINING';
   zoomLevel: number;
+  queueLength: number;
+  isLearningMode: boolean; // TRUE = Trust Mode (Facts)
+  currentLesson?: string;
+  trainingTopic?: string;
+  studentResponse?: string;
+  
+  // New Teacher Stats
+  teacherState?: TeacherState;
+  diagnostics?: DiagnosticReport;
 }
 
 export interface ViewportTransform {
@@ -79,4 +108,10 @@ export interface SerializedBrain {
   timestamp: number;
   neurons: Neuron[];
   clusters: Cluster[];
+}
+
+export interface AiLesson {
+    id: string;
+    topic: string;
+    prompts: { question: string, answer: string }[];
 }

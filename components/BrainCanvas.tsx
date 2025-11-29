@@ -14,7 +14,7 @@ const BrainCanvas: React.FC<BrainCanvasProps> = ({ engine, onStatsUpdate, render
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
-  const [transform, setTransform] = useState<ViewportTransform>({ x: window.innerWidth/2, y: window.innerHeight/2, scale: 0.4 });
+  const [transform, setTransform] = useState<ViewportTransform>({ x: window.innerWidth/2, y: window.innerHeight/2, scale: 0.3 });
   const [isDragging, setIsDragging] = useState(false);
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
 
@@ -32,7 +32,7 @@ const BrainCanvas: React.FC<BrainCanvasProps> = ({ engine, onStatsUpdate, render
 
   const handleWheel = (e: React.WheelEvent) => {
       const zoomSensitivity = 0.001;
-      const newScale = Math.min(Math.max(0.1, transform.scale - e.deltaY * zoomSensitivity), 5);
+      const newScale = Math.min(Math.max(0.05, transform.scale - e.deltaY * zoomSensitivity), 5);
       setTransform(prev => ({ ...prev, scale: newScale }));
       engine.currentZoom = newScale;
   };
@@ -64,71 +64,70 @@ const BrainCanvas: React.FC<BrainCanvasProps> = ({ engine, onStatsUpdate, render
           if (ctx) {
               const width = canvasRef.current.width;
               const height = canvasRef.current.height;
-              const now = Date.now();
 
               // Background
-              ctx.fillStyle = engine.isSleeping ? '#0f172a' : COLORS.BACKGROUND; 
+              ctx.fillStyle = COLORS.BACKGROUND; 
               ctx.fillRect(0, 0, width, height);
 
               ctx.save();
               ctx.translate(transform.x, transform.y);
               ctx.scale(transform.scale, transform.scale);
 
-              // --- DRAW ZONES ---
-              // Sensory
-              ctx.fillStyle = 'rgba(236, 72, 153, 0.03)';
-              ctx.fillRect(PHYSICS.ZONE_SENSORY_X - 200, -1500, 400, 3000);
-              // Language
-              ctx.fillStyle = 'rgba(59, 130, 246, 0.03)';
-              ctx.fillRect(PHYSICS.ZONE_LANGUAGE_X - 200, -1500, 400, 3000);
-              // Memory
-              ctx.fillStyle = 'rgba(139, 92, 246, 0.03)';
-              ctx.fillRect(PHYSICS.ZONE_MEMORY_X - 300, -1500, 1200, 3000);
+              // --- DRAW LAYERS (Vertical Strips) ---
+              // Layer 1
+              ctx.fillStyle = COLORS.LAYER_1 + '11';
+              ctx.fillRect(PHYSICS.LAYER_1_X - 100, -2000, 200, 4000);
+              // Layer 2
+              ctx.fillStyle = COLORS.LAYER_2 + '11';
+              ctx.fillRect(PHYSICS.LAYER_2_X - 100, -2000, 200, 4000);
+              // Layer 3
+              ctx.fillStyle = COLORS.LAYER_3 + '11';
+              ctx.fillRect(PHYSICS.LAYER_3_X - 100, -2000, 200, 4000);
+              // Layer 4
+              ctx.fillStyle = COLORS.LAYER_4 + '11';
+              ctx.fillRect(PHYSICS.LAYER_4_X - 100, -2000, 200, 4000);
 
               // --- DRAW CONNECTIONS ---
-              if (!engine.isSleeping) {
-                engine.neurons.forEach(neuron => {
-                    neuron.connections.forEach(syn => {
-                        const target = engine.neurons.find(n => n.id === syn.targetId);
-                        if (!target) return;
+              engine.neurons.forEach(neuron => {
+                  neuron.connections.forEach(syn => {
+                      const target = engine.neurons.find(n => n.id === syn.targetId);
+                      if (!target) return;
 
-                        ctx.beginPath();
-                        ctx.moveTo(neuron.x, neuron.y);
-                        ctx.lineTo(target.x, target.y);
-                        
-                        const isActive = (now - syn.lastActive) < 250;
-                        
-                        if (isActive) {
-                            ctx.strokeStyle = '#fbbf24'; 
-                            ctx.lineWidth = Math.min(5, syn.weight) / transform.scale;
-                            ctx.globalAlpha = 1;
-                        } else {
-                            ctx.strokeStyle = '#334155';
-                            ctx.lineWidth = Math.min(1, syn.weight * 0.1) / transform.scale;
-                            ctx.globalAlpha = 0.15;
-                        }
-                        ctx.stroke();
-                        ctx.globalAlpha = 1;
-                    });
-                });
-              }
+                      ctx.beginPath();
+                      ctx.moveTo(neuron.x, neuron.y);
+                      ctx.lineTo(target.x, target.y);
+                      
+                      const now = Date.now();
+                      const isActive = (now - syn.lastActive) < 200;
+                      
+                      if (isActive) {
+                          ctx.strokeStyle = '#fbbf24'; 
+                          ctx.lineWidth = Math.min(8, syn.weight) / transform.scale;
+                          ctx.globalAlpha = 1;
+                      } else {
+                          ctx.strokeStyle = '#475569';
+                          ctx.lineWidth = Math.min(2, syn.weight * 0.2) / transform.scale;
+                          ctx.globalAlpha = 0.2;
+                      }
+                      ctx.stroke();
+                      ctx.globalAlpha = 1;
+                  });
+              });
 
               // --- DRAW NEURONS ---
               engine.neurons.forEach(neuron => {
                   const isFiring = neuron.potential > 15;
                   
                   let color = COLORS.NEURON_BASE;
-                  if (neuron.pixelIndex !== undefined) color = COLORS.NODE_VISUAL;
-                  else if (neuron.isCompressed) color = COLORS.NODE_SYMBOL;
-                  else if (neuron.label && /[.,!?;:]/.test(neuron.label)) color = COLORS.NODE_PUNCTUATION;
-                  else if (neuron.regionId === 'SENSORY') color = COLORS.NODE_SENSORY;
-                  else if (neuron.regionId === 'LANG_DE') color = COLORS.NODE_GERMAN;
-                  else if (neuron.regionId === 'LANG_EN') color = COLORS.NODE_ENGLISH;
-                  else if (neuron.regionId === 'MEMORY') color = COLORS.NODE_MEMORY;
+                  if (neuron.regionId === 'LAYER_1') color = COLORS.LAYER_1;
+                  if (neuron.regionId === 'LAYER_2') color = COLORS.LAYER_2;
+                  if (neuron.regionId === 'LAYER_3') color = COLORS.LAYER_3;
+                  if (neuron.regionId === 'LAYER_4') color = COLORS.LAYER_4;
+                  if (neuron.regionId === 'SENSORY') color = COLORS.NODE_SENSORY;
 
                   if (isFiring) {
                       ctx.shadowColor = color;
-                      ctx.shadowBlur = 30;
+                      ctx.shadowBlur = 40;
                       ctx.fillStyle = '#ffffff';
                   } else {
                       ctx.shadowBlur = 0;
@@ -136,26 +135,21 @@ const BrainCanvas: React.FC<BrainCanvasProps> = ({ engine, onStatsUpdate, render
                   }
 
                   ctx.beginPath();
-                  if (neuron.isCompressed) {
-                      const s = 25;
-                      ctx.rect(neuron.x - s/2, neuron.y - s/2, s, s);
-                  } else if (neuron.pixelIndex !== undefined) {
-                      // Rectangular pixels for visual cortex
-                      ctx.rect(neuron.x - 6, neuron.y - 6, 12, 12);
+                  // Visual distinction for layers
+                  if (neuron.regionId.startsWith('LAYER')) {
+                      ctx.rect(neuron.x - 10, neuron.y - 10, 20, 20);
                   } else {
-                      const r = neuron.character ? 14 : 10;
-                      ctx.arc(neuron.x, neuron.y, r, 0, Math.PI * 2);
+                      ctx.arc(neuron.x, neuron.y, 12, 0, Math.PI * 2);
                   }
                   ctx.fill();
                   
-                  // Draw Label
-                  if (transform.scale > 0.2 || isFiring) {
-                      if (neuron.character || neuron.label) {
+                  // Labels
+                  if (transform.scale > 0.15 || isFiring) {
+                      if (neuron.label) {
                           ctx.fillStyle = '#fff';
-                          ctx.font = neuron.isCompressed ? 'bold 18px monospace' : '12px sans-serif';
+                          ctx.font = '14px sans-serif';
                           ctx.textAlign = 'center';
-                          const yOff = neuron.character ? 5 : 24;
-                          ctx.fillText(neuron.character || neuron.label || '', neuron.x, neuron.y + yOff);
+                          ctx.fillText(neuron.label, neuron.x, neuron.y - 20);
                       }
                   }
               });
@@ -182,11 +176,13 @@ const BrainCanvas: React.FC<BrainCanvasProps> = ({ engine, onStatsUpdate, render
     >
       <canvas ref={canvasRef} className="block" />
       
-      {/* Zone Labels Overlay */}
-      <div className="absolute top-4 left-0 w-full flex justify-between px-20 pointer-events-none text-slate-600 font-bold text-xs tracking-widest opacity-40">
-          <div style={{ width: '30%', textAlign: 'center' }}>SENSORY (VISUAL/TEXT)</div>
-          <div style={{ width: '30%', textAlign: 'center' }}>LANGUAGE PROCESSING</div>
-          <div style={{ width: '30%', textAlign: 'center' }}>CONCEPT MEMORY</div>
+      {/* Layer Labels */}
+      <div className="absolute top-4 left-0 w-full flex justify-center pointer-events-none text-slate-500 font-mono text-xs opacity-60">
+          <div className="w-[300px] text-center ml-[10%]">INPUT / LANG</div>
+          <div className="w-[300px] text-center">ENCODE</div>
+          <div className="w-[300px] text-center">HIDDEN</div>
+          <div className="w-[300px] text-center">ABSTRACT</div>
+          <div className="w-[300px] text-center">OUTPUT</div>
       </div>
     </div>
   );
