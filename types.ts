@@ -79,6 +79,13 @@ export interface DiagnosticReport {
     errorCode?: string; // e.g., "NO_OUTPUT_SIGNAL"
 }
 
+export interface SystemConfig {
+    n8nWebhookUrl: string;
+    localLlmUrl: string;
+    useRealAi: boolean;
+    autoPrune: boolean;
+}
+
 export interface BrainStats {
   neuronCount: number;
   synapseCount: number;
@@ -96,6 +103,7 @@ export interface BrainStats {
   // New Teacher Stats
   teacherState?: TeacherState;
   diagnostics?: DiagnosticReport;
+  config?: SystemConfig;
 }
 
 export interface ViewportTransform {
@@ -108,6 +116,7 @@ export interface SerializedBrain {
   timestamp: number;
   neurons: Neuron[];
   clusters: Cluster[];
+  config?: SystemConfig;
 }
 
 export interface AiLesson {

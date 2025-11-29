@@ -1,5 +1,5 @@
 
-import { Neuron, Neurotransmitter, Synapse, BrainStats, ChatMessage, Cluster, SerializedBrain, AiLesson, TeacherState, DiagnosticReport } from "../types";
+import { Neuron, Neurotransmitter, Synapse, BrainStats, ChatMessage, Cluster, SerializedBrain, AiLesson, TeacherState, DiagnosticReport, SystemConfig } from "../types";
 import { PHYSICS, COLORS, ALPHABET_GRID, COMMON_WORDS_DE, COMMON_WORDS_EN, NEGATIVE_FEEDBACK_WORDS, POSITIVE_FEEDBACK_WORDS, SEMANTIC_DB } from "../constants";
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -15,6 +15,14 @@ export class BioEngine {
   isSleeping: boolean = false;
   isLearningMode: boolean = false; 
   
+  // --- SYSTEM CONFIG ---
+  config: SystemConfig = {
+      n8nWebhookUrl: "",
+      localLlmUrl: "http://localhost:11434/api/generate",
+      useRealAi: false,
+      autoPrune: true
+  };
+
   // --- SMART TEACHER STATE ---
   isTraining: boolean = false;
   trainingTopic: string = "Grundlagen";
@@ -38,6 +46,7 @@ export class BioEngine {
   outputBuffer: string[] = [];
   
   lastInputNeurons: Neuron[] = []; 
+  lastInputNeuron: Neuron | null = null;
   activeConceptNeurons: Neuron[] = []; 
   
   inputQueue: string[] = [];
@@ -53,7 +62,7 @@ export class BioEngine {
     
     setInterval(() => {
         this.discoverNewTopics();
-        this.pruneNetwork();
+        if (this.config.autoPrune) this.pruneNetwork();
     }, 10000);
   }
 
@@ -84,8 +93,6 @@ export class BioEngine {
     this.clusters = [
       { id: 'SENSORY', label: 'SENSORY (INPUT)', x: PHYSICS.ZONE_SENSORY_X, y: 0, radius: 200, color: COLORS.CLUSTER_SENSORY, targetCount: 140, layerIndex: 0 },
       { id: 'LANG', label: 'LANGUAGE CENTER', x: PHYSICS.ZONE_LANGUAGE_X, y: 0, radius: 250, color: COLORS.CLUSTER_ENGLISH, targetCount: 0, layerIndex: 0.5 },
-      
-      // DEEP LEARNING LAYERS
       { id: 'LAYER_1', label: 'LAYER 1: ENCODE', x: PHYSICS.LAYER_1_X, y: 0, radius: 120, color: COLORS.LAYER_1 + '22', targetCount: 0, layerIndex: 1 },
       { id: 'LAYER_2', label: 'LAYER 2: HIDDEN', x: PHYSICS.LAYER_2_X, y: 0, radius: 120, color: COLORS.LAYER_2 + '22', targetCount: 0, layerIndex: 2 },
       { id: 'LAYER_3', label: 'LAYER 3: ABSTRACT', x: PHYSICS.LAYER_3_X, y: 0, radius: 120, color: COLORS.LAYER_3 + '22', targetCount: 0, layerIndex: 3 },
@@ -117,16 +124,59 @@ export class BioEngine {
     return n;
   }
 
-  // --- INTELLIGENT TEACHER ENGINE ---
+  // --- REAL AI INTEGRATION ---
+  
+  async callLocalLLM(prompt: string): Promise<string> {
+      if (!this.config.localLlmUrl) return "Error: No Local LLM URL configured.";
+      
+      try {
+          // Standard Ollama/LocalAI format
+          const response = await fetch(this.config.localLlmUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  model: "llama3", // Default, can be changed by user later
+                  prompt: `Du bist ein Lehrer für ein neuronales Netz. Antworte kurz. Thema: ${prompt}`,
+                  stream: false
+              })
+          });
+          
+          if (!response.ok) throw new Error("Local AI Offline");
+          const data = await response.json();
+          return data.response || "Keine Antwort vom LLM.";
+      } catch (e) {
+          console.error(e);
+          return "FEHLER: Konnte lokale AI nicht erreichen (CORS oder Offline). Nutze Simulation.";
+      }
+  }
 
-  // This simulates calling an external LLM (Like Gemini/GPT)
-  // In the offline version, we use a hardcoded semantic graph.
-  // In the online/EXE version, this function would fetch data from an API.
+  async sendToN8N(text: string) {
+      if (!this.config.n8nWebhookUrl) return;
+      
+      try {
+          // Fire and forget - don't block the brain
+          fetch(this.config.n8nWebhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  source: "BioNet_V16",
+                  timestamp: Date.now(),
+                  output: text
+              })
+          }).catch(e => console.warn("N8N Send Failed", e));
+      } catch (e) {
+          // Ignore errors to keep simulation running
+      }
+  }
+
+  // --- TEACHER ENGINE ---
+
   askExternalAI(prompt: string): { intent: string, topic?: string, curriculum?: string[] } {
       const upper = prompt.toUpperCase();
       
       // 1. Parse Intent
       let topic = "";
+      // Simple heuristic mapping
       if (upper.includes("HUND")) topic = "HUND";
       else if (upper.includes("KATZE")) topic = "KATZE";
       else if (upper.includes("AUTO")) topic = "AUTO";
@@ -134,7 +184,6 @@ export class BioEngine {
       else if (upper.includes("ICH")) topic = "ICH";
       else if (upper.includes("PROGRAMMIEREN")) topic = "PROGRAMMIEREN";
       else {
-          // Fallback for unknown topics - generic pattern matching
           const words = upper.split(' ');
           topic = words[words.length - 1].replace(/[^A-Z]/g, ''); 
       }
@@ -142,7 +191,6 @@ export class BioEngine {
       const dbEntry = SEMANTIC_DB[topic];
       
       if (dbEntry) {
-          // Build a smart curriculum based on the knowledge graph
           const steps = [];
           steps.push(`${topic}`);
           steps.push(`${dbEntry.def}`);
@@ -150,40 +198,60 @@ export class BioEngine {
           return { intent: 'TEACH', topic, curriculum: steps };
       }
       
-      if (upper.includes("FALSCH") || upper.includes("NICHT")) {
+      if (upper.includes("FALSCH") || upper.includes("NICHT") || upper.includes("STOP")) {
           return { intent: 'CORRECT' };
       }
 
-      // Fallback: Just teach the word if we don't know what it is
       return { intent: 'TEACH', topic, curriculum: [topic, `${topic} ist ein Ding.`] };
   }
 
-  // Main entry point for User interacting with the Teacher
-  processTeacherCommand(userText: string) {
+  async processTeacherCommand(userText: string) {
       this.teacherState.thoughtProcess = `Analysiere Anweisung: "${userText}"...`;
       
-      // Simulate AI "Thinking" delay
+      if (this.config.useRealAi) {
+          // --- REAL AI BRANCH ---
+          this.teacherState.thoughtProcess = `Frage externe KI (LocalHost)...`;
+          try {
+              const llmResponse = await this.callLocalLLM(userText);
+              this.teacherState.thoughtProcess = `KI Antwort erhalten. Erstelle Lehrplan...`;
+              
+              // Parse LLM response into simple sentences for the bio-net
+              const simpleSentences = llmResponse.split(/[.!?]/).filter(s => s.length > 2);
+              this.startAiTraining("EXTERNES_WISSEN", simpleSentences);
+              
+          } catch (e) {
+              this.teacherState.thoughtProcess = `KI Fehler. Falle zurück auf interne DB.`;
+              this.processInternalLogic(userText);
+          }
+      } else {
+          // --- INTERNAL SIMULATION BRANCH ---
+          this.processInternalLogic(userText);
+      }
+  }
+
+  processInternalLogic(userText: string) {
+      // Simulate thinking delay
       setTimeout(() => {
           const aiResponse = this.askExternalAI(userText);
           
           if (aiResponse.intent === 'TEACH' && aiResponse.curriculum) {
-              this.teacherState.thoughtProcess = `Thema erkannt: ${aiResponse.topic}. Generiere Lehrplan aus Wissensdatenbank...`;
+              this.teacherState.thoughtProcess = `Thema erkannt: ${aiResponse.topic}. Generiere Lehrplan aus DB...`;
               this.startAiTraining(aiResponse.topic || "Unbekannt", aiResponse.curriculum);
           } else if (aiResponse.intent === 'CORRECT') {
                this.teacherState.thoughtProcess = `Kritik erkannt. Leite Cortisol-Ausschüttung ein.`;
                this.applyReinforcement('PUNISH');
                this.pendingSystemMessages.push({
                    id: generateId(), sessionId: 0, sender: 'TEACHER', 
-                   text: "Verstanden. Ich habe das korrigiert (Verbindung geschwächt).", timestamp: Date.now() 
+                   text: "Korrektur angewendet.", timestamp: Date.now() 
                });
           } else {
-               this.teacherState.thoughtProcess = `Unklare Anweisung. Frage nach Details.`;
+               this.teacherState.thoughtProcess = `Unklare Anweisung.`;
                this.pendingSystemMessages.push({
                    id: generateId(), sessionId: 0, sender: 'TEACHER', 
-                   text: `Ich kenne "${userText}" noch nicht. Kannst du mir Eigenschaften nennen?`, timestamp: Date.now() 
+                   text: `Ich kenne "${userText}" nicht. Definiere es genauer.`, timestamp: Date.now() 
                });
           }
-      }, 800);
+      }, 500);
   }
 
   startAiTraining(topic: string, curriculum: string[]) {
@@ -197,12 +265,12 @@ export class BioEngine {
           currentFocus: topic,
           patience: 100,
           lastAction: 'Starte Lektion',
-          thoughtProcess: `Lade ${curriculum.length} Fakten über ${topic} in den Input-Buffer...`
+          thoughtProcess: `Lade ${curriculum.length} Fakten über ${topic}...`
       };
       
       this.pendingSystemMessages.push({
           id: generateId(), sessionId: 0, sender: 'TEACHER', 
-          text: `Okay, ich bringe dem Bio-Net jetzt alles über "${topic}" bei based auf meiner Datenbank.`, 
+          text: `Lehrplan "${topic}" gestartet.`, 
           timestamp: Date.now()
       });
   }
@@ -216,19 +284,16 @@ export class BioEngine {
   runSmartTeacherLoop() {
       if (!this.isTraining || this.isFrozen) return;
 
-      // Slow down the teacher to be readable
       if (Math.random() > 0.03) return; 
 
       switch (this.teacherState.status) {
           case 'TEACHING':
               if (this.currentLessonQueue.length > 0) {
                   const lesson = this.currentLessonQueue[0];
-                  
-                  // Check if we are waiting for a specific target concept
                   const targetWord = this.extractKeyConcept(lesson);
                   this.waitingForWord = targetWord;
                   
-                  this.teacherState.thoughtProcess = `Injiziere Konzept: "${lesson}" -> Ziel: Neuron "${targetWord}" aktivieren.`;
+                  this.teacherState.thoughtProcess = `Injiziere: "${lesson}"`;
                   
                   this.pendingSystemMessages.push({
                       id: generateId(), sessionId: 0, sender: 'TEACHER', 
@@ -236,20 +301,18 @@ export class BioEngine {
                       timestamp: Date.now()
                   });
                   
-                  // Teacher injects the pattern
                   const wasLearning = this.isLearningMode;
-                  this.isLearningMode = true; // Force learning ON during instruction
+                  this.isLearningMode = true; 
                   this.processInput(lesson);
                   this.isLearningMode = wasLearning;
 
                   this.teacherState.status = 'WAITING';
                   this.studentSilenceCounter = 0;
-                  this.teacherState.lastAction = `Warte auf Echo...`;
               } else {
-                  this.teacherState.thoughtProcess = `Lehrplan beendet. Evaluiere Erfolg...`;
+                  this.teacherState.thoughtProcess = `Lehrplan beendet.`;
                   this.pendingSystemMessages.push({
                       id: generateId(), sessionId: 0, sender: 'TEACHER', 
-                      text: `Training für "${this.trainingTopic}" abgeschlossen. Das Netz sollte das Konzept jetzt kennen.`, 
+                      text: `Training abgeschlossen.`, 
                       timestamp: Date.now()
                   });
                   this.stopAiTraining();
@@ -258,25 +321,20 @@ export class BioEngine {
 
           case 'WAITING':
               this.studentSilenceCounter++;
-              
-              // If silent too long -> Intervene
               if (this.studentSilenceCounter > 80) { 
                   this.teacherState.status = 'CORRECTING';
               }
               break;
               
           case 'CORRECTING':
-              this.teacherState.thoughtProcess = `Keine Reaktion auf "${this.waitingForWord}". Analysiere Blockade...`;
-              
+              this.teacherState.thoughtProcess = `Keine Reaktion auf "${this.waitingForWord}". Eingriff.`;
               const problemNeuron = this.neurons.find(n => n.label?.toUpperCase() === this.waitingForWord?.toUpperCase());
               
               if (!problemNeuron) {
-                  this.teacherState.thoughtProcess = `Neuron fehlt. Erzeuge es manuell.`;
                   this.processInput(this.waitingForWord || "");
                   this.teacherState.status = 'WAITING';
                   this.studentSilenceCounter = 0;
               } else {
-                  this.teacherState.thoughtProcess = `Neuron inaktiv. Sende elektrischen Impuls.`;
                   problemNeuron.potential += 60; 
                   this.teacherState.status = 'WAITING';
                   this.studentSilenceCounter = 0;
@@ -287,17 +345,14 @@ export class BioEngine {
 
   extractKeyConcept(sentence: string): string {
       const words = sentence.split(' ');
-      // Heuristic: Longest word is often the concept in simple sentences
       return words.reduce((a, b) => a.length > b.length ? a : b).toUpperCase();
   }
 
   runDiagnostics(): DiagnosticReport {
       const deadNeurons = this.neurons.filter(n => n.connections.length === 0 && n.regionId !== 'SENSORY').length;
       const weakConnections = this.neurons.reduce((acc, n) => acc + n.connections.filter(c => c.weight < 2).length, 0);
-      const health = Math.max(0, 100 - (deadNeurons * 2));
-      
       return {
-          networkHealth: health,
+          networkHealth: Math.max(0, 100 - (deadNeurons * 2)),
           deadNeurons,
           weakConnections,
           dominantTopic: this.trainingTopic,
@@ -305,7 +360,6 @@ export class BioEngine {
       };
   }
 
-  // --- STRICT WIRING RULES ---
   getLayerIndex(regionId: string): number {
       if (regionId === 'SENSORY') return 0;
       if (regionId.startsWith('LANG')) return 0.5;
@@ -313,16 +367,13 @@ export class BioEngine {
       if (regionId === 'LAYER_2') return 2;
       if (regionId === 'LAYER_3') return 3;
       if (regionId === 'LAYER_4') return 4;
-      return 1; // Default
+      return 1; 
   }
 
   checkConnectionValidity(source: Neuron, target: Neuron): boolean {
     if (source.id === target.id) return false;
-    
     const l1 = this.getLayerIndex(source.regionId);
     const l2 = this.getLayerIndex(target.regionId);
-    
-    // Allow connections within same layer or to higher layers
     if (this.isLearningMode) {
         return l2 >= l1; 
     }
@@ -333,11 +384,13 @@ export class BioEngine {
     const upper = word.toUpperCase();
     if (COMMON_WORDS_DE.includes(upper)) return 'LANG';
     if (COMMON_WORDS_EN.includes(upper)) return 'LANG';
-    
-    // Distribute concepts across deep layers based on complexity/length
     if (word.length > 7) return 'LAYER_3'; 
     if (word.length > 4) return 'LAYER_2';
     return 'LAYER_1';
+  }
+
+  discoverNewTopics() {
+      // Placeholder: Analyze network activity to find emerging topics
   }
 
   pruneNetwork() {
@@ -350,10 +403,6 @@ export class BioEngine {
           const hasLinks = n.connections.length > 0 || this.neurons.some(o => o.connections.some(c => c.targetId === n.id));
           return hasLinks;
       });
-  }
-
-  discoverNewTopics() {
-      // In deep layer architecture, topics emerge in Layer 3
   }
 
   applyReinforcement(type: 'REWARD' | 'PUNISH') {
@@ -378,18 +427,16 @@ export class BioEngine {
       });
   }
 
-  // --- INPUT PROCESSING WITH FEEDBACK DETECTION ---
   processInput(text: string) {
     const upperText = text.toUpperCase().trim();
     
-    // 1. Check for Feedback Commands
     const isNegative = NEGATIVE_FEEDBACK_WORDS.some(w => upperText === w || upperText.startsWith(w + ' '));
     const isPositive = POSITIVE_FEEDBACK_WORDS.some(w => upperText === w || upperText.startsWith(w + ' '));
 
     if (isNegative) {
         this.applyReinforcement('PUNISH');
         this.pendingSystemMessages.push({
-            id: generateId(), sessionId: 0, sender: 'SYSTEM', text: 'Verstanden. Korrektur angewendet (Cortisol ausgeschüttet).', timestamp: Date.now(), isCorrection: true
+            id: generateId(), sessionId: 0, sender: 'SYSTEM', text: 'Verstanden. Korrektur angewendet.', timestamp: Date.now(), isCorrection: true
         });
         return; 
     }
@@ -399,30 +446,23 @@ export class BioEngine {
         return;
     }
 
-    // 2. Normal Processing
     const tokens = text.match(/[\p{L}\p{N}_]+|[.,!?;:{}\[\]<>/\\*+=]/gu);
     if (tokens) {
       this.lastInputNeuron = null; 
       tokens.forEach(token => this.processInputToken(token));
       
-      // In Chat Mode, allow the brain to free-associate a response
       if (!this.isLearningMode && !this.isTraining) {
            setTimeout(() => this.generateResponse(), 500);
       }
-      
-      // In Training Mode, we EXPECT the brain to echo/respond
       if (this.isTraining) {
           setTimeout(() => this.generateResponse(), 500);
       }
     }
   }
 
-  lastInputNeuron: Neuron | null = null; 
-
   processInputToken(token: string) {
     if (this.isFrozen) return;
     
-    // Sensory
     const upper = token.toUpperCase();
     for (let i = 0; i < upper.length; i++) {
       const char = upper[i];
@@ -433,14 +473,12 @@ export class BioEngine {
       }
     }
 
-    // Concept Mapping (Deep Layers)
     let neuron = this.neurons.find(n => n.label === token);
     const isPunctuation = /[.,!?;:]/.test(token);
     
     if (!neuron) {
         const targetRegion = isPunctuation ? 'LAYER_4' : this.determineRegionForWord(token);
         let zoneX = PHYSICS.LAYER_1_X;
-        
         if (targetRegion === 'LANG') zoneX = PHYSICS.ZONE_LANGUAGE_X;
         if (targetRegion === 'LAYER_1') zoneX = PHYSICS.LAYER_1_X;
         if (targetRegion === 'LAYER_2') zoneX = PHYSICS.LAYER_2_X;
@@ -461,7 +499,6 @@ export class BioEngine {
     this.activeConceptNeurons.push(neuron);
     if (this.activeConceptNeurons.length > 8) this.activeConceptNeurons.shift();
 
-    // Wiring
     if (this.isLearningMode && this.lastInputNeuron) {
         this.strengthenConnection(this.lastInputNeuron, neuron, 5.0);
     } else if (this.lastInputNeuron) {
@@ -473,7 +510,6 @@ export class BioEngine {
 
   strengthenConnection(source: Neuron, target: Neuron, amount: number) {
       if (!this.checkConnectionValidity(source, target)) return;
-      
       let connection = source.connections.find(c => c.targetId === target.id);
       if (!connection) {
           source.connections.push({
@@ -490,8 +526,6 @@ export class BioEngine {
 
   generateResponse() {
       if (this.activeConceptNeurons.length === 0) return;
-      
-      // Start from the last active concept to generate a "train of thought"
       let currentNeuron = this.activeConceptNeurons[this.activeConceptNeurons.length - 1];
       const sentence: string[] = [];
       const visited = new Set<string>();
@@ -515,7 +549,13 @@ export class BioEngine {
       }
 
       if (sentence.length > 0) {
+          const fullSentence = sentence.join(' ');
           this.outputBuffer.push(...sentence);
+          
+          // SEND TO N8N if configured
+          if (this.config.n8nWebhookUrl) {
+              this.sendToN8N(fullSentence);
+          }
       }
   }
 
@@ -534,7 +574,6 @@ export class BioEngine {
   }
 
   tick(): BrainStats {
-    // Teacher Loop
     this.runSmartTeacherLoop();
 
     if (this.isFrozen) return { neuronCount: this.neurons.length, synapseCount: 0, clusterCount: this.clusters.length, fps: 0, mode: 'FROZEN', zoomLevel: 1, queueLength: 0, isLearningMode: false };
@@ -542,7 +581,6 @@ export class BioEngine {
     const now = Date.now();
     this.frameCount++;
 
-    // BATCH READING
     if (this.inputQueue.length > 0) {
         this.readingTickCounter++;
         if (this.readingTickCounter > this.readingSpeed) {
@@ -558,7 +596,6 @@ export class BioEngine {
     let newMessage: ChatMessage | undefined;
     if (this.pendingSystemMessages.length > 0) newMessage = this.pendingSystemMessages.shift();
 
-    // Physics
     for (const n of this.neurons) {
       n.potential *= 0.95;
       if (n.refractoryPeriod > 0) n.refractoryPeriod--;
@@ -576,21 +613,19 @@ export class BioEngine {
       }
     }
 
-    // Process Output Buffer (The Student Speaking)
     if (this.outputBuffer.length > 0) {
         const text = this.outputBuffer.join(' ').replace(/\s+([.,!?:;])/g, '$1');
         
-        // Check if student "hit" the target word the teacher is waiting for
         if (this.isTraining && this.waitingForWord && this.teacherState.status === 'WAITING') {
             const cleanOutput = text.toUpperCase();
             if (cleanOutput.includes(this.waitingForWord.toUpperCase())) {
                 this.applyReinforcement('REWARD');
                 this.pendingSystemMessages.push({
                     id: generateId(), sessionId: 0, sender: 'TEACHER', 
-                    text: `Korrekt! "${text}" erkannt. (Dopamin ausgeschüttet)`, timestamp: Date.now()
+                    text: `Korrekt! "${text}" erkannt.`, timestamp: Date.now()
                 });
-                this.teacherState.status = 'TEACHING'; // Move to next lesson
-                this.currentLessonQueue.shift(); // Done with this one
+                this.teacherState.status = 'TEACHING'; 
+                this.currentLessonQueue.shift();
             }
         }
 
@@ -613,22 +648,26 @@ export class BioEngine {
       isLearningMode: this.isLearningMode,
       currentLesson: this.isTraining ? this.teacherState.status : undefined,
       trainingTopic: this.trainingTopic,
-      studentResponse: this.teacherState.thoughtProcess, // Hack to display thought process in stats
+      studentResponse: this.teacherState.thoughtProcess,
       teacherState: this.teacherState,
-      diagnostics: this.runDiagnostics()
+      diagnostics: this.runDiagnostics(),
+      config: this.config
     };
   }
   
-  analyzeSentiment(text: string) {} 
-  processVisualInput(data: Uint8Array) {}
+  updateConfig(newConfig: Partial<SystemConfig>) {
+      this.config = { ...this.config, ...newConfig };
+  }
+
   startThinking() { this.isThinking = true; }
   stopThinking() { this.isThinking = false; }
   toggleFreeze() { this.isFrozen = !this.isFrozen; }
   toggleLearningMode() { this.isLearningMode = !this.isLearningMode; }
   consolidateMemory() { this.isSleeping = true; setTimeout(()=>this.isSleeping=false, 2000); }
-  exportState() { return JSON.stringify({neurons: this.neurons, clusters: this.clusters}); }
+  exportState() { return JSON.stringify({neurons: this.neurons, clusters: this.clusters, config: this.config}); }
   importState(json: string) { 
       const data = JSON.parse(json);
       if(data.neurons) this.neurons = data.neurons;
+      if(data.config) this.config = data.config;
   }
 }

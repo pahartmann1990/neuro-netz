@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import BrainCanvas from './components/BrainCanvas';
 import ControlPanel from './components/ControlPanel';
 import { BioEngine } from './services/BioEngine';
-import { BrainStats, ChatMessage } from './types';
+import { BrainStats, ChatMessage, SystemConfig } from './types';
 
 const App: React.FC = () => {
   const engineRef = useRef<BioEngine>(new BioEngine(window.innerWidth, window.innerHeight));
@@ -54,7 +54,6 @@ const App: React.FC = () => {
       engineRef.current.processInput(text);
   };
 
-  // Handler for the Teacher Console input
   const handleTeacherCommand = (command: string) => {
       setChatHistory(prev => [...prev, {
           id: Math.random().toString(36).substr(2,9),
@@ -78,7 +77,7 @@ const App: React.FC = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `bionet_layer_v15_${Date.now()}.json`;
+      a.download = `bionet_sys_v16_${Date.now()}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -92,6 +91,10 @@ const App: React.FC = () => {
       };
       reader.readAsText(file);
   };
+
+  const handleUpdateConfig = (config: Partial<SystemConfig>) => {
+      engineRef.current.updateConfig(config);
+  }
 
   return (
     <div className="w-full h-screen relative bg-slate-950 overflow-hidden font-sans select-none flex">
@@ -115,8 +118,9 @@ const App: React.FC = () => {
         renderEnabled={renderEnabled}
         setRenderEnabled={setRenderEnabled}
         onToggleLearning={() => engineRef.current.toggleLearningMode()}
-        onStartTeacher={handleTeacherCommand} // Updated to use new command handler
+        onStartTeacher={handleTeacherCommand} 
         onStopTeacher={() => engineRef.current.stopAiTraining()}
+        onUpdateConfig={handleUpdateConfig}
       />
 
       <div className="flex-1 relative h-full">
@@ -127,7 +131,7 @@ const App: React.FC = () => {
           />
           <div className="absolute bottom-6 right-6 pointer-events-none text-right">
              <h1 className="text-6xl font-black text-slate-800 tracking-tighter mix-blend-difference opacity-50">
-               SEMANTIC MENTOR
+               SYSTEM INTEGRATION
              </h1>
           </div>
       </div>
